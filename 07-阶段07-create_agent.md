@@ -31,7 +31,7 @@
 | 人工介入 | 不支持 | `interrupt` + 内置 HITL 中间件 |
 | 自定义 | 改提示词或继承类 | **中间件**，可插桩循环的每个阶段 |
 
-核心循环不变（调模型 → 执行工具 → 直到不再调工具），但底层换成可持久化、可观测、可插桩的图运行时，所以官方推荐。
+核心循环没变（调模型 → 执行工具 → 直到不再调工具），但底层换成了可持久化、可观测、可插桩（能在关键位置插入自己的逻辑）的图运行时——这也正是官方推荐它的原因。
 
 > **记忆钩子**：旧 AgentExecutor 是"黑盒录音机"——靠解析模型吐出来的文本来判断调了啥工具，脆；新 create_agent 是"结构化点单"——直接用模型原生 tool_calls，而且底层就是 LangGraph，能存盘、能打断、能插桩。
 
@@ -48,7 +48,7 @@ from langchain.agents import create_agent      # 官方导入路径
 > 注意：模型—工具循环内 `before_model` / `wrap_model_call` / `after_model` / `wrap_tool_call` 会**多轮重复执行**（每次模型调用、每次工具调用都跑一遍），不是整条链只走一次。
 
 - `before/after_*`：在特定时点跑逻辑
-- `wrap_*`：**包裹式**，接收 `(request, handler)`，可改请求再交给 `handler`、可捕获异常重试、可短路返回；`request.override(model=..., tools=...)` 能动态换模型和裁剪工具
+- `wrap_*`：**包裹式**，接收 `(request, handler)`，可改请求再交给 `handler`、可捕获异常重试、可短路返回；另外，`request.override(model=..., tools=...)` 能动态换模型和裁剪工具
 
 | 工具中间件 `wrap_tool_call` | 模型中间件 `before_model` / `wrap_model_call` / `after_model` |
 |---|---|
@@ -56,7 +56,7 @@ from langchain.agents import create_agent      # 官方导入路径
 | 内置：`ToolCallLimitMiddleware`、`HumanInTheLoopMiddleware`、`ToolRetryMiddleware` | 内置：`SummarizationMiddleware`、`PIIMiddleware`、`ModelFallbackMiddleware`、`LLMToolSelectorMiddleware`、`ModelCallLimitMiddleware` |
 | 能拿到 `request.tool`、`request.tool_call`，可返回 `ToolMessage` 覆盖结果 | 能拿到 `ModelRequest`（messages/tools/system_prompt/model），`override` 后交给 `handler` |
 
-**判断标准**：这件事能不能靠改提示词解决？能，就别用中间件；需要确定性、每次必执行、涉及安全或成本控制时才用。
+**判断标准**：这件事能不能靠改提示词解决？能，就别用中间件；只有在需要确定性、每次都必执行、涉及安全或成本控制时，才用它。
 
 > **记忆钩子**：中间件是"硬规矩"，prompt 是"软说服"。想让模型"最好别删库"，写 prompt 里它偶尔会犯；想"删库一律拦截"，就得用中间件——因为中间件在代码层每次必跑，不靠模型自觉。
 

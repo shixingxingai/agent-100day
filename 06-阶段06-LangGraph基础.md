@@ -2,7 +2,7 @@
 
 > 定位：从"管道"升级到"有状态、可循环、可持久化"的编排 ｜ 难度 ★★★ ｜ 预计 6 小时
 
-> **【一句话记住】**：节点只交"修改单"，reducer 决定追加还是覆盖，thread_id 分出不同会话。
+> **【一句话记住】**：节点只交"补丁"，reducer 决定追加还是覆盖，thread_id 分出不同会话。
 >
 > **【生活类比】**：LangGraph 像一个工厂车间——State 是车间中央那块白板，每个节点（工人）只在白板上贴一张"我改了哪几格"的便签（返回补丁），而不是擦掉重写整面墙。`add_messages` 这个 reducer 规定"消息便签要往上贴、不许盖住旧的"；Checkpointer 是下班时给白板拍快照，第二天凭 thread_id（哪个工位哪班）把快照还原。
 
@@ -62,8 +62,8 @@ class State(TypedDict):
 
 ### 3.3 Checkpointer 与 thread_id
 
-- **Checkpointer** 在每个 super-step（每个节点执行完）把 State 快照写入存储，下次调用前自动读回。没有它，图是无状态的。
-- **`thread_id` 是对话的唯一标识**：相同 `thread_id` 的多次 `invoke` 共享并累积同一份 state；不同 `thread_id` 完全隔离。一个编译好的图可并发服务多个会话，靠的就是它。
+- **Checkpointer** 在每个 super-step（每个节点执行完）把 State 快照（一份完整的状态拷贝）写入存储，下次调用前自动读回。没有它，图是无状态的。
+- **`thread_id` 是对话的唯一标识**：相同 `thread_id` 的多次 `invoke` 共享并累积同一份 state；不同 `thread_id` 完全隔离。也正因如此，一个编译好的图能并发服务多个会话。
 
 | 后端 | 适用 |
 |------|------|
@@ -103,7 +103,7 @@ def node_b_even(state: State) -> dict:
 
 ### 步骤 3：写路由函数与条件边
 
-*（`builder` 即 `StateGraph(State)` 实例，需在步骤 2 后先 `builder = StateGraph(State)` 并 add_node）*
+*（`builder` 是 `StateGraph(State)` 实例：需在步骤 2 之后先写 `builder = StateGraph(State)`，再 add_node）*
 
 ```python
 def route(state: State) -> str:
@@ -198,7 +198,7 @@ print(graph.invoke({"messages": [("user", "我叫什么？")]}, cfg)["messages"]
 
 ## 6. 练习
 
-**基础**：给上面的奇偶图加一个"重新生成"分支：当数字 > 90 时回到节点 A 重新生成（构成循环），并设 `recursion_limit` 防死循环。
+**基础**：给上面的奇偶图加一个"重新生成"分支：当数字 > 90 时回到节点 A 重新生成（构成循环）。别忘了同时设 `recursion_limit` 防死循环。
 
 **进阶**：实现一个"计数器"图：每经过一个节点 `count` 加 1（用 `Annotated[int, operator.add]`），跑 5 次 `invoke` 验证它跨调用累加——体会 Checkpointer 的持久化。
 

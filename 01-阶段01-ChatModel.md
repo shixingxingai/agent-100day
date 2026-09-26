@@ -13,6 +13,7 @@
 - [ ] 用 `init_chat_model` 一行初始化任意厂商的模型，并说清它"统一"了什么
 - [ ] 区分 `SystemMessage` / `HumanMessage` / `AIMessage`，并正确组装多轮对话历史
 - [ ] 从返回的 `AIMessage` 中取出文本、token 用量和元信息
+- [ ] 用"内容块"组装图文混合消息，并知道本地图片要走 base64（把图片等二进制编码成文本）
 - [ ] 在不改动业务代码的前提下，把 OpenAI 模型换成 Anthropic / Google 模型
 
 ## 2. 前置知识
@@ -57,7 +58,7 @@
 ### 步骤 1：安装依赖
 
 ```bash
-pip install -U "langchain>=0.3" langchain-openai
+pip install -U "langchain>=1.0" langchain-openai
 ```
 
 ### 步骤 2：配置密钥（不要硬编码进代码）
@@ -114,6 +115,50 @@ configurable.invoke("你好", config={"configurable": {"model": "gpt-4o-mini"}})
 configurable.invoke("你好", config={"configurable": {"model": "claude-sonnet-4-6"}})
 ```
 
+### 步骤 7：多模态消息（图片输入）
+
+`HumanMessage` 的 `content` **不止能是字符串**——写成"一串内容块"就能图文混排。截图问答、发票识别、图表理解、扫描件解析都靠它，2026 年已是基础能力。
+
+*（沿用上文步骤 3 中已定义的 `model`；需选支持视觉的模型，如 `gpt-4o`）*
+
+```python
+from langchain_core.messages import HumanMessage
+
+msg = HumanMessage(content=[
+    {"type": "text", "text": "这张图里有哪些内容？用三点概括。"},
+    {"type": "image_url", "image_url": {"url": "https://example.com/chart.png"}},
+])
+print(model.invoke([msg]).content)
+```
+
+**两种图片传法**：
+
+| 传法 | 写法 | 适用 |
+|------|------|------|
+| 公网 URL | `{"url": "https://..."}` | 图片已在对象存储 / CDN 上 |
+| 本地文件（base64） | `{"url": f"data:image/png;base64,{b64}"}` | 本地/内网图片，不让模型侧去拉 |
+
+```python
+import base64
+import pathlib
+
+b64 = base64.b64encode(pathlib.Path("invoice.png").read_bytes()).decode()
+msg = HumanMessage(content=[
+    {"type": "text", "text": "提取这张发票的金额与开票日期。"},
+    {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{b64}"}},
+])
+```
+
+**三个实务要点**：
+
+1. **图片要花钱**：图像按"切片 token"计费，分辨率越高越贵。OpenAI 系可在 `image_url` 里传 `"detail": "low" | "high" | "auto"` 控制精细度——"只要看个大概"就用 `low`。
+2. **多张图就是放多个块**：`content` 里放多个 `image_url`，配合文字块提出对比要求（如"比较这两张表"）。
+3. **结构化输出照样能用**：多模态消息 + `with_structured_output`（阶段 02）就是"发票/表单 → JSON"的标准做法。
+
+> **记忆钩子**：`content` 从"一个字符串"升级成"**一串内容块**"——文字块和图片块排排坐，像给模型发一条带附件的聊天消息。
+
+**音频输入**同理：`{"type": "input_audio", "input_audio": {"data": b64, "format": "wav"}}`（需模型支持音频输入；端到端语音对话见补充篇 29）。
+
 ## 5. 完整示例
 
 ```python
@@ -160,6 +205,7 @@ print(model.invoke(messages).content)
 - [ ] 能不看文档写出 `init_chat_model("openai:gpt-4o")` 并调用
 - [ ] 能说出三种消息各自的作用与典型场景
 - [ ] 知道"模型输出的是 `AIMessage`，取文本用 `.content`"
+- [ ] 会写图文混合的 `content` 块，知道本地图要转 base64
 - [ ] 能解释"换模型只改一个字符串"的原因
 - [ ] 密钥不出现在代码里
 
@@ -172,17 +218,22 @@ print(model.invoke(messages).content)
 | `response.content` 是空 | 可能触发了工具调用（见阶段 03） | 打印 `response.tool_calls` 检查 |
 | 账单意外增长 | 循环里反复调用 + 用了贵模型 | 阶段 19 会系统解决 |
 | 中文输出被截断 | `max_tokens` 太小 | 调大或省略该参数（部分新模型改用 `max_completion_tokens`） |
+| 发图片后模型说"看不到图片" | 用了不支持视觉的模型，或图片块格式写错 | 换 `gpt-4o` 这类多模态模型；确认 `content` 是**列表**且块类型为 `image_url` |
+| 本地图片传不进去 | 只给了文件路径 | 读成 base64 拼成 `data:image/png;base64,...` |
+| 图片多模态调用账单暴涨 | 高分辨率图每张按大量 token 计费 | 先传 `"detail": "low"` 试，够用就别上 `high` |
 
 ## 9. 延伸
 
 - `model.with_structured_output(Schema)`：让模型直接输出结构化对象（阶段 02 会用到）
 - `.stream()`：打字机效果（阶段 16 系统讲）
+- 多模态消息块：图文混合输入的写法；扫描件/图片 PDF 的解析在阶段 04、15 继续
+- 补充篇 29 语音与实时 Agent：把"音频输入"升级成端到端语音对话
 
 ## 10. 记忆强化
 
 **口诀**：
 
-> 冒号分厂商，接口都一样；系统定规矩，人来问，AI 答；回复塞回历史里，下轮才不忘。
+> 冒号分厂商，接口都一样；系统定规矩，人来问，AI 答；回复塞回历史里，下轮才不忘；内容块排排坐，图也能看懂。
 
 **5 分钟回顾闪卡**（先默答，再展开核对）：
 
@@ -198,6 +249,8 @@ print(model.invoke(messages).content)
    <details><summary>点击看答案</summary>因为所有厂商返回的都是同一个 ChatModel 接口对象，通用方法（invoke/stream/batch/ainvoke）和通用参数（temperature 等）跨厂商一致，所以业务代码不用动。</details>
 6. 问：`response.content` 为空时可能是什么原因？
    <details><summary>点击看答案</summary>很可能是模型触发了工具调用（tool_calls），此时 content 为空、tool_calls 里才有内容。打印 `response.tool_calls` 即可确认（详见阶段 03）。</details>
+7. 问：怎么把一张本地图片发给模型？
+   <details><summary>点击看答案</summary>把 `HumanMessage` 的 `content` 写成**列表**：文字块 `{"type": "text", ...}` + 图片块 `{"type": "image_url", "image_url": {"url": "data:image/png;base64,<b64>"}}`。公网图可直接给 `https://` URL；本地图必须读成 base64 拼 `data:` URI。前提是模型本身支持视觉（如 `gpt-4o`），并用 `"detail"` 控制精细度以控成本。</details>
 
 **费曼任务**：
 

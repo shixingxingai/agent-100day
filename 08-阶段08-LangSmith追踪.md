@@ -38,7 +38,7 @@ LangSmith 把一次请求中的每次模型调用、工具调用、检索记录�
 ### 步骤 2：安装 SDK
 
 ```bash
-pip install -U langsmith
+pip install -U langsmith openai
 ```
 
 ### 步骤 3：设置环境变量
@@ -104,14 +104,48 @@ client = wrap_openai(OpenAI())      # 自动记录每次 OpenAI 调用
 def my_retriever(q: str) -> str: ...
 ```
 
-## 5. 一条 trace 里能看到什么
+## 5. 完整示例
+
+把阶段 07 的 agent 接上追踪，跑一次**能看到完整 run 树**的调用：
+
+```python
+# trace_demo.py
+import os
+
+from langchain.agents import create_agent
+from langchain_core.tools import tool
+
+os.environ.setdefault("LANGSMITH_TRACING", "true")
+os.environ.setdefault("LANGSMITH_PROJECT", "weather-agent-dev")
+
+
+@tool
+def get_weather(city: str) -> str:
+    """查询指定城市的当前天气。"""
+    return f"{city}：晴，26℃"
+
+
+agent = create_agent("openai:gpt-4o-mini", tools=[get_weather],
+                     system_prompt="你是天气助手，必须调用工具查天气，不要凭记忆回答。")
+
+result = agent.invoke(
+    {"messages": [{"role": "user", "content": "上海明天天气如何"}]},
+    config={"tags": ["dev", "weather-agent"], "metadata": {"user_id": "u-001", "env": "local"}},
+)
+print(result["messages"][-1].content)
+# -> 示例输出（以实际运行为准）：一段引用工具结果的天气回答；同时 LangSmith 项目里出现一条完整 trace
+```
+
+跑完到 LangSmith 项目里打开这条 trace，你应该能看到：
 
 - **完整 run 树与执行顺序**：agent → ChatOpenAI → 工具 → 再调模型，几次调用、什么顺序一目了然
 - **每步精确输入/输出**：完整 messages（含 system prompt 与工具 schema）、模型返回的 `tool_calls` 及参数、工具的返回值
 - **耗时瀑布图**：每层的 latency，判断是模型慢、网络慢还是工具慢
 - **token 用量与成本**：input/output tokens、模型名、调用次数
-- **错误与堆栈**：失败步骤标红，带完整 traceback，不用复现即可定位
+- **报错与堆栈**：失败步骤标红，带完整 traceback，不用复现即可定位
 - **运行上下文**：run_id、temperature、tags/metadata；配合 Checkpointer 还能按 `thread_id` 串起多轮会话
+
+> **这就是追踪的价值**：同一段代码不开追踪时你只看到"最终答案"；开了之后，"哪一步慢、哪一步错、哪一步贵"全在图上——阶段 10 的评测、阶段 17 的 CI、补充篇 26 的线上监控，全都建立在"看得见"这件事上。
 
 ## 6. 练习
 
@@ -121,11 +155,19 @@ def my_retriever(q: str) -> str: ...
 
 **挑战**：给同一段代码分别用 `default` 和自建项目两个 `LANGSMITH_PROJECT` 各跑一次，体会"开发/生产分离"；再给生产 trace 打上 `env=prod` 的 tag 并只用 tag 过滤出来。
 
+<details>
+<summary>参考答案要点</summary>
+
+- 基础：让 `celsius_to_fahrenheit(celsius: float)` 收到 `"20°C"` 这类字符串，工具内部 `float()` 转换会抛 `ValueError`。在 LangSmith 里展开那条 trace 的 tool 子节点，`error` 字段会显示异常类型与堆栈——报错能**定位到具体节点**，这正是 trace 的核心价值。
+- 进阶：在 trace 列表里按 latency 排序，逐条看 `total_tokens` 与耗时。最贵最慢的通常是**输出更长**（output_tokens 高）或**多跑了一轮工具循环**（消息轮次多）。结论：成本与延迟主要由"输出长度 + 轮次"决定，而不是由提问长短决定。
+- 挑战：靠 `LANGSMITH_PROJECT` 环境变量区分（不设时落到 `default` 项目）；给生产 trace 打 tag 用 `config={"tags": ["env=prod"], "metadata": {...}}`，再在 UI 用 tag 过滤器只筛 `env=prod`。项目隔离 + tag 过滤 = 开发/生产分离的最小方案。
+</details>
+
 ## 7. 自测清单
 
 - [ ] 能独立配好 4 个核心环境变量
 - [ ] 知道 EU/APAC 必须设置 `LANGSMITH_ENDPOINT` 且末尾不带斜杠
-- [ ] 能在界面上找到 run 树、token、耗时、错误四项信息
+- [ ] 能在界面上找到 run 树、token、耗时、报错四项信息
 - [ ] 会用 tags / metadata 做筛选
 - [ ] 知道密钥不能进 Git
 
@@ -160,7 +202,7 @@ def my_retriever(q: str) -> str: ...
 2. 问：界面上完全看不到 trace，最先排查什么？
    <details><summary>点击看答案</summary>先查 `LANGSMITH_TRACING` 是否真的等于字符串 `true`（注意拼写、是否 export 生效），再查鉴权/区域是否匹配。</details>
 3. 问：trace 里 run 树、耗时、token、报错分别帮你判断什么？
-   <details><summary>点击看答案</summary>run 树看执行顺序与调用了几次模型/工具；耗时瀑布图判断慢在模型、网络还是工具；token 用量算成本；错误标红带堆栈，不用复现即可定位失败步骤。</details>
+   <details><summary>点击看答案</summary>run 树看执行顺序与调用了几次模型/工具；耗时瀑布图判断慢在模型、网络还是工具；token 用量算成本；报错标红带堆栈，不用复现即可定位失败步骤。</details>
 4. 问：tags 和 metadata 有什么区别、各用来干嘛？
    <details><summary>点击看答案</summary>两者都用于筛选；tags 是扁平字符串标签（如 `["dev","weather-agent"]`），metadata 是结构化键值（如 `user_id`、`env`）。配合 `LANGSMITH_PROJECT` 做开发/生产分离。</details>
 5. 问：非 LangChain 原生代码怎么接入追踪？

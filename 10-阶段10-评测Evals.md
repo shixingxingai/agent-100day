@@ -4,14 +4,14 @@
 
 > **【一句话记住】**：改代码不靠手感靠分数，负样本和阈值是命门。
 >
-> **【生活类比】**：离线评测是每次改车都上检测线，在线监控是上路后盯仪表盘。RAGAS 三指标像体检分诊：Faithfulness 查"有没有照抄课本胡编"，Answer Relevancy 查"有没有答非所问"，Context Recall 查"课本有没有给全"——先分诊科再开药。
+> **【生活类比】**：离线评测是每次改车都上检测线，在线监控是上路后盯仪表盘。RAGAS 三指标像体检分诊：Faithfulness 查"有没有照抄课本胡编"，Answer Relevancy 查"有没有答非所问"，Context Recall 查"课本有没有给全"——先分诊，再开药。
 
 ## 1. 学习目标
 
 - [ ] 说清为什么 agent 必须有评测（非确定性系统的迭代依据）
 - [ ] 搭出"数据集 + 目标函数 + 评估器"的离线评测闭环
 - [ ] 理解 RAGAS 三元组，能用它定位"是检索错了还是生成错了"
-- [ ] 把评测接进 CI，让每次改动都有回归结论
+- [ ] 把评测接进 CI，让每次改动都有回归结论（回归：确认改动没把原有能力改坏）
 
 ## 2. 前置知识
 
@@ -38,7 +38,7 @@
 | 统计指标 | 与参考答案比：精确率、编辑距离、BLEU | 摘要、翻译 |
 | LLM-as-judge | 强模型按 rubric 打分（0–1 + 理由） | 开放式问答、有用性、语气 |
 
-LLM-as-judge 要点：**rubric 要具体**（"是否给出了可执行的下一步"而不是"好不好"）、**要求输出理由**（便于复核）、**定期用人工标注校准**。
+LLM-as-judge 要点：**rubric（评分标准）要具体**（"是否给出了可执行的下一步"而不是"好不好"）、**要求输出理由**（便于复核）、**定期用人工标注校准**。
 
 ### 3.3 RAGAS 三元组（RAG 必测）
 
@@ -202,6 +202,14 @@ if __name__ == "__main__":
 **进阶**：把 system_prompt 改严格一版，再跑一次，用 Experiments 对比页说明哪类样本变好、哪类变差。
 
 **挑战**：给你的 RAG（阶段 04）加 RAGAS 三指标；若 Context Recall 低，改 chunk 参数后再测，用数据证明改动有效。
+
+<details>
+<summary>参考答案要点</summary>
+
+- 基础：用 `client.create_dataset` / `create_examples` 建 15 条正常 + 5 条应拒答（`outputs={"should_refuse": True}`），跑 `evaluate(target, data=..., evaluators=[...])`，把第一次的 mean score 记为基线。**先有基线，才能判断后续改动是变好还是变坏。**
+- 进阶：同一数据集、换 `experiment_prefix` 再跑一次，在 Experiments 对比页逐条 diff。典型现象：严格版**拒答类样本变好**（5 条全过），但**正常样本的 helpfulness 下降**（过度拒答）。要点：单看总均分没有意义，要**按样本类型**看得失。
+- 挑战：`faithfulness`（答案是否忠于检索资料）、`answer_relevancy`（是否答到点上）、`context_recall`（该召回的资料是否被召回）。Context Recall 低说明**检索环节漏召回**，改 chunk_size/overlap 或加混合检索后重测，用两次分数对比证明改动有效。
+</details>
 
 ## 7. 自测清单
 

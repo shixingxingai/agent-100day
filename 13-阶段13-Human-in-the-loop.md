@@ -23,7 +23,7 @@ Agent 能调用工具 = 能造成真实副作用（转账、发邮件、删数�
 
 > **记忆钩子**：只读操作（查天气、搜资料）随便跑；一旦动作是"动真格的钱、信、数据"，就像开车上高速前先拉手刹——机器再自信也得等人点头，因为错了撤不回。
 
-LangGraph 的实现：节点里调用 `interrupt(payload)` → 图在此处抛出中断并**保存检查点** → 外部拿到 payload → 用户决策 → 用 `Command(resume=decision)` 恢复，从中断处继续。
+LangGraph 的实现：节点里调用 `interrupt(payload)` → 图在此处抛出中断并**保存检查点** → 外部拿到 payload → 用户决策。随后用 `Command(resume=decision)` 恢复，从中断处继续。
 
 **两个硬性前提**：
 1. 必须编译进 Checkpointer（否则中断后状态丢失，无法恢复）
@@ -86,7 +86,7 @@ agent = create_agent(model, tools, checkpointer=InMemorySaver(), middleware=[
 
 ### 步骤 5：修改后再继续（edit 决策）
 
-**注意区分两种恢复格式**——自定义节点 `interrupt()` 的 resume 值格式自定（`interrupt()` 的返回值就是你传给 `Command(resume=...)` 的值）；而 `HumanInTheLoopMiddleware`（步骤 4）的 resume 必须是 `{"decisions": [...]}` 结构：
+**注意区分两种恢复格式**：自定义节点 `interrupt()` 的 resume 值格式自定（`interrupt()` 的返回值就是你传给 `Command(resume=...)` 的值）。而 `HumanInTheLoopMiddleware`（步骤 4）的 resume 必须是 `{"decisions": [...]}` 结构：
 
 ```python
 # 场景 A：自定义节点 interrupt() —— 格式自定，先改状态再恢复
@@ -146,6 +146,14 @@ print(graph.invoke(Command(resume={"type": "approve"}), cfg)["result"])
 **进阶**：实现 `edit` 决策——用户在审批时修改收件人，系统按修改后的值执行（提示：先 `update_state` 再 resume）。
 
 **挑战**：把审批做成 FastAPI 接口：`POST /run` 触发任务并返回 interrupt payload，`POST /resume` 携带决策恢复。体会"长任务 + 异步审批"的服务形态。
+
+<details>
+<summary>参考答案要点</summary>
+
+- 基础：工具执行前先 `decision = interrupt({"action": "delete_file", "path": ...})`。approve 走 `Command(resume={"type": "approve"})` 后继续执行删除；reject 走 `Command(resume={"type": "reject"})`，节点内判断为 reject 后**直接返回、不调用删除**。要点：reject 分支必须显式短路，不能靠"忘了调工具"。
+- 进阶：自定义节点用 `graph.update_state(cfg, {"to": 新收件人})` 改状态，再 `Command(resume={"type": "approve"})` 恢复；`HumanInTheLoopMiddleware` 则必须用 `Command(resume={"decisions": [{"type": "edit", "edited_action": {"name": "send_email", "args": {...}}}]})`——**两种 resume 格式不能混用**。edit 的本质是"恢复前把状态/动作改掉"。
+- 挑战：`POST /run` 触发 `graph.invoke`，把返回里的 `result["__interrupt__"][0].value` 作为 payload 用 200 返回（**中断不是错误**）；`POST /resume` 拿前端决策调 `graph.invoke(Command(resume=决策), cfg)`。要点：中断是服务端主动留下的"待办"，必须把 `thread_id` 一起回给客户端才能恢复。
+</details>
 
 ## 7. 自测清单
 

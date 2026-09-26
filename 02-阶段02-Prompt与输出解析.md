@@ -37,11 +37,11 @@
 
 模型输出本质是**文本**。解析器负责把它变成**带类型校验的对象**：
 
-1. 用 Pydantic 定义目标结构（字段名 + 类型 + `Field(description=...)`）
+1. 用 Pydantic（Python 的数据校验库）定义目标结构（字段名 + 类型 + `Field(description=...)`）
 2. `parser.get_format_instructions()` 生成格式说明，注入 prompt
 3. 把模型输出交给 `parser.parse()`（或串进 LCEL 管道）
 
-`Field(description=...)` 不是注释——它会被写进给模型看的 schema 里，直接影响抽取质量。
+`Field(description=...)` 不是注释——它会被写进给模型看的 schema（数据结构定义）里，直接影响抽取质量。
 
 > **记忆钩子**：别把 `Field(description="...")` 当成写给同事看的代码注释——它其实是模型"看得见"的试卷题目说明。你写"价格"，模型可能给你带单位的字符串；你写"价格，数字，单位人民币"，它才乖乖吐浮点数。
 
