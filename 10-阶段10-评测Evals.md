@@ -93,7 +93,7 @@ def target(inputs: dict) -> dict:
 
 ### 步骤 4：写评估器
 
-*（`judge_chain` 是用强模型按 rubric 配好的打分链，建议 `temperature=0`）*
+*（`judge` 是用强模型按 rubric 打分用的模型实例，建议 `temperature=0`）*
 
 ```python
 def contains_check(run, example) -> bool:                      # 规则型
@@ -101,9 +101,9 @@ def contains_check(run, example) -> bool:                      # 规则型
 # -> 命中返回 True，否则 False
 
 def helpfulness(run, example) -> dict:                         # LLM-as-judge
-    score = judge_chain.invoke({"question": example.inputs["question"],
-                                "answer": run.outputs["answer"]})
-    return {"key": "helpfulness", "score": float(score)}
+    score = judge.invoke([{"role": "user", "content":
+        f"按有用性给回答打分（0~1，只输出数字）。\n问题：{example.inputs['question']}\n回答：{run.outputs['answer']}"}]).content
+    return {"key": "helpfulness", "score": float(score.strip())}
 # -> 返回如 {"key": "helpfulness", "score": 0.8}
 ```
 
@@ -115,6 +115,8 @@ results = evaluate(target, data="weather-agent-v1", evaluators=[contains_check, 
 ```
 
 ### 步骤 6：对比实验（改 prompt 前后的 A/B）
+
+*（`target_v2` 是改用新 prompt 后的目标函数）*
 
 ```python
 evaluate(target_v2, data="weather-agent-v1",
@@ -128,9 +130,12 @@ evaluate(target_v2, data="weather-agent-v1",
 
 ```python
 from ragas import evaluate as ragas_evaluate
-from ragas.metrics import faithfulness, answer_relevancy, context_precision
+from ragas.metrics import faithfulness, answer_relevancy, context_precision, context_recall
 
-# 需要：question / answer / contexts / ground_truth 四列
+# 所需字段（新版 RAGAS 用 user_input / response / retrieved_contexts / reference）：
+# - faithfulness / answer_relevancy：user_input + response + retrieved_contexts
+# - context_precision / context_recall：还需 reference（参考答案）
+# 旧版字段名为 question / answer / contexts / ground_truth，按你的 ragas 版本对齐
 ```
 
 ### 步骤 8：接进 CI
@@ -153,26 +158,41 @@ from langchain.agents import create_agent
 
 client = Client()
 agent = create_agent(init_chat_model("openai:gpt-4o", temperature=0), tools=[...])
+judge = init_chat_model("openai:gpt-4o", temperature=0)     # 判官模型复用，避免每条样本重建
 
 def target(inputs: dict) -> dict:
     r = agent.invoke({"messages": [{"role": "user", "content": inputs["question"]}]})
     return {"answer": r["messages"][-1].content}
 
-def refusal_ok(run, example) -> bool:
-    """负样本必须拒答；正样本必须给出实质内容"""
-    ans = run.outputs["answer"]
-    if example.outputs.get("should_refuse"):
-        return "不知道" in ans or "无法" in ans
-    return len(ans.strip()) > 10
+def answer_ok(run, example) -> bool:
+    """期望内容是否出现在答案里（负样本的期望词就是"不知道"这类拒答表达）"""
+    ans, want = run.outputs["answer"], example.outputs["must_contain"]
+    return want in ans or any(w in ans for w in ("不知道", "未提及", "无法"))
 
 def groundedness(run, example) -> dict:
-    """LLM-as-judge：答案是否只基于给定资料"""
-    s = judge.invoke({"context": example.inputs.get("context", ""), "answer": run.outputs["answer"]})
-    return {"key": "groundedness", "score": float(s)}
+    """LLM-as-judge：回答质量打分（0~1）"""
+    s = judge.invoke(
+        [{"role": "user", "content":
+          f"给下面这个回答的质量打分（0~1，只输出数字）。\n"
+          f"问题：{example.inputs['question']}\n回答：{run.outputs['answer']}"}]
+    ).content
+    return {"key": "groundedness", "score": float(s.strip())}
 
 if __name__ == "__main__":
-    evaluate(target, data="weather-agent-v1", evaluators=[refusal_ok, groundedness],
-             experiment_prefix="ci")
+    import sys
+    results = evaluate(target, data="weather-agent-v1",
+                       evaluators=[answer_ok, groundedness], experiment_prefix="ci")
+    # --fail-under：汇总所有评估器得分均值，低于阈值就让 CI 红（退出码 1）
+    if "--fail-under" in sys.argv:
+        threshold = float(sys.argv[sys.argv.index("--fail-under") + 1])
+        scores = [er.score
+                  for row in results                                    # ExperimentResults 可迭代
+                  for er in row["evaluation_results"]["results"]
+                  if er.score is not None]
+        avg = sum(scores) / len(scores) if scores else 0.0
+        print(f"平均分 {avg:.3f}（阈值 {threshold}）")
+        if avg < threshold:
+            sys.exit(1)
 ```
 
 ## 6. 练习

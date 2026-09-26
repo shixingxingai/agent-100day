@@ -58,8 +58,8 @@ def send_email_node(state):
 graph = builder.compile(checkpointer=InMemorySaver())
 cfg = {"configurable": {"thread_id": "t-1"}}
 res = graph.invoke({"to": "a@b.com", "body": "..."}, cfg)
-print(res["__interrupt__"])       # 中断信息在这里
-# -> 示例输出（以实际运行为准）：一个 tuple，里面是 interrupt 抛出的 payload（含 draft、question）
+print(res["__interrupt__"])       # 中断信息在这里（Interrupt 对象组成的 tuple，payload 在 .value 属性里）
+# -> 取 payload：res["__interrupt__"][0].value（含 draft、question）
 ```
 
 ### 步骤 3：恢复执行
@@ -86,9 +86,18 @@ agent = create_agent(model, tools, checkpointer=InMemorySaver(), middleware=[
 
 ### 步骤 5：修改后再继续（edit 决策）
 
+**注意区分两种恢复格式**——自定义节点 `interrupt()` 的 resume 值格式自定（`interrupt()` 的返回值就是你传给 `Command(resume=...)` 的值）；而 `HumanInTheLoopMiddleware`（步骤 4）的 resume 必须是 `{"decisions": [...]}` 结构：
+
 ```python
-graph.update_state(cfg, {"draft": "修改后的草稿"})     # 先改状态
+# 场景 A：自定义节点 interrupt() —— 格式自定，先改状态再恢复
+graph.update_state(cfg, {"draft": "修改后的草稿"})     # 先改状态（key 必须是图 state 里真实存在的字段）
 graph.invoke(Command(resume={"type": "approve"}), cfg) # 再恢复
+
+# 场景 B：HumanInTheLoopMiddleware —— 必须用 decisions 结构
+graph.invoke(Command(resume={"decisions": [{"type": "approve"}]}), cfg)
+# edit 决策要带修改后的动作：
+graph.invoke(Command(resume={"decisions": [{"type": "edit",
+    "edited_action": {"name": "send_email", "args": {"to": "new@b.com", "body": "..."}} }]}), cfg)
 ```
 
 ### 步骤 6：前端对接

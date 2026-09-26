@@ -43,7 +43,9 @@ from langchain.agents import create_agent      # 官方导入路径
 
 ### 3.3 中间件：六个钩子
 
-`before_agent` → `before_model` → `wrap_model_call` → `wrap_tool_call` → `after_model` → `after_agent`
+模型链：`before_agent` → `before_model` → `wrap_model_call` → `after_model` → `after_agent`；工具链：`wrap_tool_call`（包在工具执行前后）。
+
+> 注意：模型—工具循环内 `before_model` / `wrap_model_call` / `after_model` / `wrap_tool_call` 会**多轮重复执行**（每次模型调用、每次工具调用都跑一遍），不是整条链只走一次。
 
 - `before/after_*`：在特定时点跑逻辑
 - `wrap_*`：**包裹式**，接收 `(request, handler)`，可改请求再交给 `handler`、可捕获异常重试、可短路返回；`request.override(model=..., tools=...)` 能动态换模型和裁剪工具
@@ -125,11 +127,17 @@ agent.invoke({"messages": [{"role": "user", "content": "我叫什么？"}]}, cfg
 
 ```python
 from langchain.agents.middleware import wrap_tool_call
+from langchain_core.messages import ToolMessage
 
 @wrap_tool_call
 def block_dangerous(request, handler):
-    if request.tool.name == "delete_user":
-        return handler(request).override(content="该操作已被安全策略拦截")
+    if request.tool_call["name"] == "delete_user":
+        # 短路：直接返回拦截消息、不调用 handler，危险操作不会被执行
+        return ToolMessage(
+            content="该操作已被安全策略拦截",
+            name=request.tool_call["name"],
+            tool_call_id=request.tool_call["id"],
+        )
     return handler(request)
 
 agent = create_agent(model, tools, middleware=[block_dangerous])
@@ -141,12 +149,14 @@ agent = create_agent(model, tools, middleware=[block_dangerous])
 from langchain.agents.middleware import SummarizationMiddleware, ModelCallLimitMiddleware
 
 agent = create_agent(model, tools, middleware=[
-    SummarizationMiddleware(model="gpt-4o-mini", trigger={"tokens": 3000}, keep={"messages": 6}),
-    ModelCallLimitMiddleware(max_calls=20),      # 防失控循环
+    SummarizationMiddleware(model="gpt-4o-mini", trigger={"tokens": 3000}, keep=("messages", 6)),
+    ModelCallLimitMiddleware(run_limit=20),     # 防失控循环：单次运行最多 20 次模型调用（thread_limit 限整个会话线程，需配 checkpointer）
 ])
 ```
 
 ## 5. 完整示例
+
+*（最小可运行骨架：含工具、Checkpointer 与 thread_id；自定义中间件见步骤 6/7）*
 
 ```python
 from langchain.agents import create_agent
@@ -235,7 +245,7 @@ print(r["messages"][-1].content)
 4. 问：多轮记忆要哪两样东西缺一不可？
    <details><summary>点击看答案</summary>create_agent 时传 checkpointer（如 InMemorySaver），并且每次 invoke 时在 config 里传 thread_id。两者缺一个都记不住。</details>
 5. 问：怎么防止 agent 无限循环烧钱？
-   <details><summary>点击看答案</summary>加 ModelCallLimitMiddleware(max_calls=...) 限制模型调用次数，同时设 recursion_limit；这是安全兜底，不能只靠 prompt 让模型"适可而止"。</details>
+   <details><summary>点击看答案</summary>加 ModelCallLimitMiddleware(run_limit=...)（单次运行上限）/ thread_limit=...（线程累计上限，需配 checkpointer）限制模型调用次数，同时设 recursion_limit；这是安全兜底，不能只靠 prompt 让模型"适可而止"。</details>
 6. 问：调用 agent 后怎么取最终回答，而不是一堆中间消息？
    <details><summary>点击看答案</summary>结果是 messages 列表，取最后一条：`result["messages"][-1].content`。直接打印整个 result["messages"] 会看到工具调用等中间过程。</details>
 

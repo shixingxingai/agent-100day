@@ -85,7 +85,8 @@ print(type(response).__name__)   # AIMessage
 
 ```python
 claude = init_chat_model("anthropic:claude-sonnet-4-6", temperature=0)  # 需 pip install langchain-anthropic
-gemini = init_chat_model("google_vertexai:gemini-2.5-flash", temperature=0)
+gemini = init_chat_model("google_genai:gemini-2.5-flash", temperature=0)  # 需 pip install langchain-google-genai + GOOGLE_API_KEY
+# 用 VertexAI 则写 "google_vertexai:..."，需 pip install langchain-google-vertexai + GCP 凭据
 # 调用方式完全一致：claude.invoke("...")
 ```
 
@@ -131,7 +132,7 @@ messages = [
 
 resp = model.invoke(messages)
 print(resp.content)
-print(resp.response_metadata.get("usage_metadata"))   # token 用量
+print(resp.usage_metadata)   # token 用量（AIMessage 的顶层属性；OpenAI 原始字段在 response_metadata["token_usage"]）
 
 # 把模型的回复追加进历史，继续第二轮
 messages += [resp, HumanMessage("那怎么写回 CSV？")]
@@ -170,7 +171,7 @@ print(model.invoke(messages).content)
 | 多轮对话模型"失忆" | 没把上一轮的 `AIMessage` 追加进列表 | 每次调用后 `messages.append(resp)` |
 | `response.content` 是空 | 可能触发了工具调用（见阶段 03） | 打印 `response.tool_calls` 检查 |
 | 账单意外增长 | 循环里反复调用 + 用了贵模型 | 阶段 19 会系统解决 |
-| 中文输出被截断 | `max_tokens` 太小 | 调大或省略该参数 |
+| 中文输出被截断 | `max_tokens` 太小 | 调大或省略该参数（部分新模型改用 `max_completion_tokens`） |
 
 ## 9. 延伸
 
@@ -192,7 +193,7 @@ print(model.invoke(messages).content)
 3. 问：三种消息类型 `SystemMessage` / `HumanMessage` / `AIMessage` 各管什么？
    <details><summary>点击看答案</summary>SystemMessage 设定角色、语气、输出格式与边界；HumanMessage 是用户输入；AIMessage 是模型的历史回复（模型输出本身就是 AIMessage）。</details>
 4. 问：从 `AIMessage` 里怎么取文本正文和 token 用量？
-   <details><summary>点击看答案</summary>正文用 `response.content`；token 用量用 `response.response_metadata.get("usage_metadata")`，里面有 input_tokens / output_tokens。</details>
+   <details><summary>点击看答案</summary>正文用 `response.content`；token 用量用顶层属性 `response.usage_metadata`（含 input_tokens / output_tokens / total_tokens）。注意它不在 `response_metadata` 里——后者是 provider 原始信息，OpenAI 下的原始字段名是 `token_usage`。</details>
 5. 问：为什么说"换模型只改一个字符串"？
    <details><summary>点击看答案</summary>因为所有厂商返回的都是同一个 ChatModel 接口对象，通用方法（invoke/stream/batch/ainvoke）和通用参数（temperature 等）跨厂商一致，所以业务代码不用动。</details>
 6. 问：`response.content` 为空时可能是什么原因？

@@ -49,6 +49,7 @@
 
 ```python
 from typing import Annotated
+from typing_extensions import TypedDict
 from langgraph.graph.message import add_messages
 
 class State(TypedDict):
@@ -78,11 +79,15 @@ class State(TypedDict):
 
 ```bash
 pip install -U langgraph
+# 用文件/SQL 持久化时按需追加：
+# pip install -U langgraph-checkpoint-sqlite       # SqliteSaver
+# pip install -U langgraph-checkpoint-postgres     # PostgresSaver
 ```
 
 ### 步骤 2：定义 State 与节点
 
 ```python
+import random
 from typing_extensions import TypedDict
 
 class State(TypedDict):
@@ -90,7 +95,7 @@ class State(TypedDict):
     result: str
 
 def node_a(state: State) -> dict:
-    return {"number": 42}                       # 补丁：只写自己关心的字段
+    return {"number": random.randint(0, 99)}    # 补丁：只写自己关心的字段（此处随机数以演示两条分支）
 
 def node_b_even(state: State) -> dict:
     return {"result": f"{state['number']} 是偶数"}
@@ -193,7 +198,7 @@ print(graph.invoke({"messages": [("user", "我叫什么？")]}, cfg)["messages"]
 
 ## 6. 练习
 
-**基础**：给阶段 06 的奇偶图加一个"重新生成"分支：当数字 > 90 时回到节点 A 重新生成（构成循环），并设 `recursion_limit` 防死循环。
+**基础**：给上面的奇偶图加一个"重新生成"分支：当数字 > 90 时回到节点 A 重新生成（构成循环），并设 `recursion_limit` 防死循环。
 
 **进阶**：实现一个"计数器"图：每经过一个节点 `count` 加 1（用 `Annotated[int, operator.add]`），跑 5 次 `invoke` 验证它跨调用累加——体会 Checkpointer 的持久化。
 
@@ -203,7 +208,7 @@ print(graph.invoke({"messages": [("user", "我叫什么？")]}, cfg)["messages"]
 <summary>参考答案要点</summary>
 
 - 基础：`add_conditional_edges("A", lambda s: "retry" if s["number"]>90 else "ok", {"retry":"A", ...})`；`graph.invoke(..., {"recursion_limit": 10})`。
-- 进阶：`count: Annotated[int, operator.add]`，节点 `return {"count": 1}`；必须同 `thread_id` 才累加。
+- 进阶：`import operator` 后写 `count: Annotated[int, operator.add]`，节点 `return {"count": 1}`；必须同 `thread_id` 才累加。
 - 挑战：条件边返回 `"rewrite"` 回到 draft 节点；`update_state` 后可 `invoke(None, cfg)` 从中断处继续。
 </details>
 

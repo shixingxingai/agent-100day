@@ -63,8 +63,14 @@ print(prompt.format(product="智能手表", audience="健身爱好者"))
 ### 步骤 2：字面花括号必须转义
 
 ```python
-bad = PromptTemplate(template="输出 JSON：{\"name\": \"{name}\"}")   # 会报错/被误解析
-good = PromptTemplate(template='输出 JSON：{{"name": "{name}"}}')     # 正确
+# 想输出包含花括号的字面文本（如 JSON），必须双写转义。
+bad = PromptTemplate(template='输出 JSON：{"price": 100}')     # 单花括号被当成变量占位符
+bad.format()
+# -> KeyError: '"price"'   模板去找名叫 "price"（含引号）的变量，你没传
+
+good = PromptTemplate(template='输出 JSON：{{"price": 100}}')   # 双层花括号 = 字面花括号
+good.format()
+# -> 输出 JSON：{"price": 100}
 ```
 
 ### 步骤 3：ChatPromptTemplate 多角色
@@ -193,7 +199,7 @@ print(type(item).__name__, item.price, item.features)
 ## 9. 延伸
 
 - `JsonOutputParser`：只要 dict，不要 Pydantic 校验时的轻量选择
-- `OutputFixingParser`：解析失败时让模型自动修复（多一次调用，成本换稳定性）
+- `OutputFixingParser`：解析失败时让模型自动修复（多一次调用，成本换稳定性）。1.x 起该类位于 `langchain_classic.output_parsers`
 
 ## 10. 记忆强化
 
@@ -205,8 +211,8 @@ print(type(item).__name__, item.price, item.features)
 
 1. 问：`PromptTemplate` 和 `ChatPromptTemplate` 的输出分别是什么？
    <details><summary>点击看答案</summary>PromptTemplate 输出一个字符串，适合无角色区分的翻译/摘要/文案；ChatPromptTemplate 输出消息列表（SystemMessage + HumanMessage 等），适合需要角色区分的对话。</details>
-2. 问：模板里要输出字面的 `{"name": "x"}` 该怎么写？
-   <details><summary>点击看答案</summary>把字面花括号双层写成 `{{"name": "{name}"}}`，否则单花括号会被当成变量占位符。</details>
+2. 问：模板里要输出字面的 `{"price": ...}` 该怎么写？
+   <details><summary>点击看答案</summary>字面花括号要双层写成 `{{"price": "{product}"}}`——键名的花括号是字面（双写转义），变量槽位 `{product}` 单写。若单写键名花括号，会被当成变量占位符而报错。</details>
 3. 问：`Field(description=...)` 是写给谁看的？
    <details><summary>点击看答案</summary>不是给程序员看的注释，它会被写进给模型的 JSON Schema 里，直接影响模型抽取字段的质量。描述越清楚，输出越准。</details>
 4. 问：忘记注入 `format_instructions` 会发生什么？

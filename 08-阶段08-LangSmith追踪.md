@@ -52,7 +52,7 @@ export LANGSMITH_ENDPOINT=https://eu.api.smith.langchain.com
 # Windows PowerShell：.venv\Scripts\Activate.ps1；$env:LANGSMITH_TRACING="true"；$env:LANGSMITH_API_KEY="lsv2_..."
 ```
 
-Windows PowerShell：`setx LANGSMITH_TRACING true`。更推荐写 `.env` + `python-dotenv`，并把 `.env` 加进 `.gitignore`。
+Windows PowerShell：`setx LANGSMITH_TRACING true`（持久写入用户环境变量，**需重开终端才生效**；当前会话用 `$env:LANGSMITH_TRACING="true"`）。更推荐写 `.env` + `python-dotenv`，并把 `.env` 加进 `.gitignore`。
 
 ### 步骤 4：跑代码（无需改一行）
 

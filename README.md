@@ -37,8 +37,16 @@ python -m venv .venv
 source .venv/bin/activate
 
 pip install -U langchain langchain-openai langchain-community
-pip install -U langchain-text-splitters langchain-chroma chromadb pypdf
+pip install -U langchain-text-splitters langchain-chroma pypdf
 pip install -U langgraph langsmith pydantic python-dotenv
+```
+
+按阶段追加依赖（用到哪章装哪个，各章"步骤 1：安装依赖"有说明）：
+
+```bash
+pip install -U langchain-classic rank-bm25 langchain-postgres langgraph-checkpoint-postgres
+pip install -U langchain-mcp-adapters langgraph-supervisor ragas fastapi uvicorn
+pip install -U "langgraph-cli[inmem]"
 ```
 
 部分示例需要模型提供方的 API 密钥或 LangSmith 配置。请按照相应章节的说明，通过环境变量或本地环境文件配置；不要把密钥提交到版本控制中。
