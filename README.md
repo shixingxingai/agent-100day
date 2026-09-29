@@ -1,3 +1,5 @@
+**中文** | [English](README.en.md)
+
 # LangChain / LangGraph 系统学习教程
 
 本项目是一套面向实践的 LangChain 与 LangGraph 中文学习教程，覆盖从模型调用、提示词和工具，到 RAG、Agent、评测与生产部署的完整学习路径。每个阶段包含学习目标、核心概念、示例、练习和自测内容，并配有记忆卡片与复习材料。
