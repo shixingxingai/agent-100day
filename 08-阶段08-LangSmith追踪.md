@@ -138,7 +138,9 @@ print(result["messages"][-1].content)
 
 跑完到 LangSmith 项目里打开这条 trace，你应该能看到：
 
-- **完整 run 树与执行顺序**：agent → ChatOpenAI → 工具 → 再调模型，几次调用、什么顺序一目了然
+- **完整 run 树与执行顺序**：model → ChatOpenAI → 工具 → 再调模型，几次调用、什么顺序一目了然
+
+  > **1.x 注意**：agent 的流式节点名是 **`"model"`**（0.x 的教程里写的是 `"agent"`）。若你按节点名过滤事件（`chunk["metadata"]["langgraph_node"] == "model"`），照抄老代码会**不报错但永远匹配不到**。见 [阶段 16 §3](16-阶段16-流式与服务化.md)。
 - **每步精确输入/输出**：完整 messages（含 system prompt 与工具 schema）、模型返回的 `tool_calls` 及参数、工具的返回值
 - **耗时瀑布图**：每层的 latency，判断是模型慢、网络慢还是工具慢
 - **token 用量与成本**：input/output tokens、模型名、调用次数

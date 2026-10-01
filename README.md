@@ -53,7 +53,7 @@ pip install -U langgraph langsmith pydantic python-dotenv
 
 ```bash
 pip install -U langchain-classic rank-bm25 langchain-postgres langgraph-checkpoint-postgres
-pip install -U langchain-mcp-adapters langgraph-supervisor ragas fastapi uvicorn
+pip install -U 'langchain[mcp]' ragas fastapi uvicorn
 pip install -U "langgraph-cli[inmem]"
 ```
 

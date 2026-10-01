@@ -1,7 +1,7 @@
 # 前瞻篇 29：语音与实时 Agent（级联三段式 vs 端到端语音）
 
 > 定位：把"打字聊天"升级成"能打电话办事" ｜ 难度 ★★★ ｜ 预计 6 小时
-> **建议学习时机**：学完阶段 16（流式与服务化）后。语音本质是"更严格的流式"——延迟预算从"能接受"变成"超过 800ms 就假"。
+> **建议学习时机**：学完阶段 16（流式与服务化）后。语音本质是"更严格的流式"——延迟预算从"能接受"变成"超过 1s 就明显感觉卡"。
 
 > **【一句话记住】**：语音 agent 的难点从来不是"听懂"，而是**在对方还没说完时就准备好接话、并且在被打断时立刻闭嘴**。
 >
@@ -42,7 +42,7 @@
 
 ### 3.2 延迟预算：把"感觉卡"拆成可测的数
 
-用户对语音的耐心比打字短得多。行业经验值（**目标，非承诺**）：
+用户对语音的耐心比打字短得多。行业经验值（**各段的目标区间，不是承诺**）：
 
 | 环节 | 目标 | 说明 |
 |------|------|------|
@@ -51,7 +51,11 @@
 | 模型首字/首音频 | 300–800ms | 端到端明显优于级联 |
 | 下行 + 播放缓冲 | 50–200ms | 缓冲太大=延迟，太小=卡顿 |
 
-**总感知延迟目标：约 800ms 以内**，低于 ~500ms 才谈得上"像真人"。
+> ⚠️ **别把四段直接相加**。上面是**各自压到最好时的下限**，朴素相加 ≈ 670–1750ms；但真实链路里 **VAD 判停与首音频有重叠**（收到"疑似说完"就先预热，不必等判停结束再请求模型），所以全链路通常落在 **1.2–1.5s**。
+>
+> 要压到这个量级，靠三件事同时发生：① 用**端到端模型**（级联的 ASR + LLM + TTS 串行，首音频压不下来）；② 用**语义轮次检测**替代固定静音时长；③ 首音频与判停**重叠预热**。
+>
+> 所以 KPI 别定在四段之和上：**1.2s 左右是合格线，压到 1s 内不错，500ms 级才谈得上"像真人"**——而 500ms 基本要求全链路端到端 + 语义轮次检测。
 
 > **记忆钩子**：**VAD 的"判停等待"往往比你想象的贵**——你以为延迟出在模型，其实大半花在"等对方真的说完了没"。把 `silence_duration_ms` 从 800 调到 500，可能比换模型更立竿见影。
 
@@ -213,12 +217,12 @@ if __name__ == "__main__":
 
 ### 步骤 3：调轮次检测（最影响体感的一步）
 
-```python
+```json
 "turn_detection": {
     "type": "server_vad",
-    "threshold": 0.5,             # 环境吵就调高，否则空调声都能触发
-    "prefix_padding_ms": 300,     # 别把开头的第一个字吃掉
-    "silence_duration_ms": 500,   # ← 抢话 vs 迟钝的分界线
+    "threshold": 0.5,             // 环境吵就调高，否则空调声都能触发
+    "prefix_padding_ms": 300,     // 别把开头的第一个字吃掉
+    "silence_duration_ms": 500    // ← 抢话 vs 迟钝的分界线
 }
 ```
 
@@ -242,22 +246,26 @@ append_assistant_partial_transcript(already_spoken_text)
 
 语音 agent 一样能调工具（查订单、改预约、发短信）。流程与阶段 03 的 tool_calls 循环同构，只是包在事件里：
 
-```python
-# ① session.update 里声明工具
-"tools": [{"type": "function", "name": "query_order",
-           "description": "按订单号查询状态",
-           "parameters": {"type": "object", "properties": {"order_id": {"type": "string"}},
-                          "required": ["order_id"]}}],
-"tool_choice": "auto",
-
-# ② 收到模型请求参数 → 你自己执行工具
-#   事件：response.function_call_arguments.done → json.loads(...) → 调你的函数
-
-# ③ 把结果塞回会话 → 让模型继续生成
-#   await ws.send(json.dumps({"type": "conversation.item.create", "item": {
-#       "type": "function_call_output", "call_id": call_id, "output": result_json}}))
-#   await ws.send(json.dumps({"type": "response.create"}))
+```json
+{
+  "tools": [{
+    "type": "function",
+    "name": "query_order",
+    "description": "按订单号查询状态",
+    "parameters": {
+      "type": "object",
+      "properties": {"order_id": {"type": "string"}},
+      "required": ["order_id"]
+    }
+  }],
+  "tool_choice": "auto"
+}
 ```
+
+> ② 收到模型请求参数 → **你自己执行工具**：监听 `response.output_item.done`，筛出 `item.type == "function_call"`，参数在 `item.arguments`（是 JSON 字符串，要 `json.loads`）与 `item.call_id`。
+> ③ 把结果塞回会话 → 让模型继续生成：`conversation.item.create` 带 `{"type": "function_call_output", "call_id": call_id, "output": result_json}`，然后 `response.create`。
+
+> **事件名版本坑**：早期协议是 `response.function_call_arguments.done`，GA 之后统一走 `response.output_item.done`（一次事件里同时给出 `function_call` 与 `function_call_output` 两类 item）。**照抄旧博客的事件名会永远等不到回调**——以官方 Realtime 文档为准。
 
 > 较新的实时模型还支持**远程 MCP**——把 MCP server 直接挂进语音会话，省掉自己搬运 `function_call_output` 的胶水（回顾阶段 14）。
 
@@ -378,7 +386,7 @@ if __name__ == "__main__":
 **口诀**：
 
 > 三段串起来慢，端到端最像人；
-> 延迟拆四段，先查 VAD 判停；
+> 延迟拆四段别相加，先查 VAD 判停；
 > 判停是旋钮，抢话迟钝两头挑；
 > 打断三件事：取消、清缓冲、记已播；
 > 音频 token 贵，能级联就级联。

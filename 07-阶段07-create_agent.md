@@ -115,23 +115,47 @@ for step in agent.stream({"messages": [...]}, stream_mode="updates"):
 
 ### 步骤 5：加多轮记忆
 
+两个参数缺一不可：`checkpointer`（记忆存在哪）和 `thread_id`（这段记忆属于谁）。
+
 ```python
 from langgraph.checkpoint.memory import InMemorySaver
+
+# checkpointer：把每轮对话存下来（阶段 06）——不传就没有记忆
 agent = create_agent(model, tools, checkpointer=InMemorySaver())
+
+# thread_id：会话标识。两次调用传同一个 id，agent 才认得"这是同一个人"
 cfg = {"configurable": {"thread_id": "u-1"}}
 agent.invoke({"messages": [{"role": "user", "content": "我叫张三"}]}, cfg)
 agent.invoke({"messages": [{"role": "user", "content": "我叫什么？"}]}, cfg)   # 记得
 ```
 
+> **`thread_id` 写死会怎样**：所有用户共用一份历史，互相串话。生产做法是每个会话生成独立 id（阶段 16 给了生成策略），并且**换 `thread_id` 等于换人**——阶段 12 的"跨会话长期记忆"要靠 `Store` 单独实现，不是靠 `thread_id`（见阶段 12）。
+
 ### 步骤 6：写一个自定义中间件
+
+前面步骤 1 只定义了 `get_weather` / `celsius_to_fahrenheit` 两个**无害**工具，所以这里先补一个真正危险的，才能演示"拦截"：
+
+```python
+from langchain_core.tools import tool
+
+
+@tool
+def delete_user(user_id: str) -> str:
+    """【危险】删除指定用户。真实项目里请再加一层人工审批。"""
+    return f"用户 {user_id} 已删除"
+```
+
+然后写中间件：
 
 ```python
 from langchain.agents.middleware import wrap_tool_call
 from langchain_core.messages import ToolMessage
 
+DANGEROUS = {"delete_user"}              # ← 换成你自己项目里的高危工具名
+
 @wrap_tool_call
 def block_dangerous(request, handler):
-    if request.tool_call["name"] == "delete_user":
+    if request.tool_call["name"] in DANGEROUS:
         # 短路：直接返回拦截消息、不调用 handler，危险操作不会被执行
         return ToolMessage(
             content="该操作已被安全策略拦截",
@@ -140,8 +164,16 @@ def block_dangerous(request, handler):
         )
     return handler(request)
 
-agent = create_agent(model, tools, middleware=[block_dangerous])
+agent = create_agent(
+    model,
+    tools=[get_weather, celsius_to_fahrenheit, delete_user],
+    middleware=[block_dangerous],
+)
 ```
+
+> **别照抄一个不存在的工具名**：`delete_user` 只是示意，本章前面的工具清单里并没有它——照抄的话这个中间件**永远不会触发**，看上去装好了防护，实则零效果。改工具名后记得同步改 `DANGEROUS` 集合。
+>
+> 更稳的两种做法：① 用**工具对象**而不是字符串比较（`request.tool_call["name"] in DANGEROUS` 里 `DANGEROUS` 由工具 `.name` 生成，改名自动跟着变）；② **默认拒绝法**——把 `ALLOWED` 白名单列出来，其余全拦，这样新增工具时是"默认不安全"，需要人主动放行，而不是"默认不安全地忘记加黑名单"。
 
 ### 步骤 7：用内置中间件解决常见需求
 
@@ -149,7 +181,7 @@ agent = create_agent(model, tools, middleware=[block_dangerous])
 from langchain.agents.middleware import SummarizationMiddleware, ModelCallLimitMiddleware
 
 agent = create_agent(model, tools, middleware=[
-    SummarizationMiddleware(model="gpt-4o-mini", trigger={"tokens": 3000}, keep=("messages", 6)),
+    SummarizationMiddleware(model="openai:gpt-4o-mini", trigger=("tokens", 3000), keep=("messages", 6)),
     ModelCallLimitMiddleware(run_limit=20),     # 防失控循环：单次运行最多 20 次模型调用（thread_limit 限整个会话线程，需配 checkpointer）
 ])
 ```

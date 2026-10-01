@@ -58,9 +58,22 @@ def send_email_node(state):
 graph = builder.compile(checkpointer=InMemorySaver())
 cfg = {"configurable": {"thread_id": "t-1"}}
 res = graph.invoke({"to": "a@b.com", "body": "..."}, cfg)
-print(res["__interrupt__"])       # 中断信息在这里（Interrupt 对象组成的 tuple，payload 在 .value 属性里）
-# -> 取 payload：res["__interrupt__"][0].value（含 draft、question）
+
+# 取出中断信息（旧写法，仍兼容但已 deprecated）
+for i in res["__interrupt__"]:          # Interrupt 对象组成的 tuple
+    payload = i.value                    # 你 interrupt() 传进去的那个 dict
+
+# ✅ 1.x 推荐写法：直接读 result.interrupts，不用碰 "__interrupt__" 这个魔法键
+for i in res.interrupts:
+    payload = i.value
+# -> 取 payload：{"action": "send_email", "draft": ..., "question": ...}
 ```
+
+> **为什么要换写法**：`res["__interrupt__"]` 依赖字典里的魔法键名，内部实现一改就失效（官方已标 deprecated）。`result.interrupts` 是**属性访问**，拼错会直接 `AttributeError`——这正是你想要的：**响亮地失败**，而不是悄悄返回 `None`。
+>
+> **怎么判断有没有被中断**：不要用 `if "__interrupt__" in res`，用 `if result.interrupts:`——空 tuple 表示正常跑完了。
+>
+> ⚠️ 中断生效的前提是 **必须有 checkpointer**：没有它，图无法存下"执行到哪一步"，`interrupt()` 会直接抛错。这条也是阶段 27 实战项目里给 `build_agent` 加断言的原因。
 
 ### 步骤 3：恢复执行
 
@@ -98,7 +111,20 @@ graph.invoke(Command(resume={"decisions": [{"type": "approve"}]}), cfg)
 # edit 决策要带修改后的动作：
 graph.invoke(Command(resume={"decisions": [{"type": "edit",
     "edited_action": {"name": "send_email", "args": {"to": "new@b.com", "body": "..."}} }]}), cfg)
+# reject 的说明文本键名是 "message"（不是 "reason"）：
+graph.invoke(Command(resume={"decisions": [{"type": "reject",
+    "message": "收件人不对"}]}), cfg)
 ```
+
+> **两套 resume 结构的键名不一样，别混用**：
+>
+> | | 自定义 `interrupt()` | `HumanInTheLoopMiddleware` |
+> |---|---|---|
+> | 外层 | 直接就是你传的 dict | 必须包一层 `{"decisions": [...]}` |
+> | 拒绝理由 | 自己定（本教程用 `reason`） | 键名是 **`message`** |
+> | 编辑动作 | 自己用 `update_state` 先改 | 用 **`edited_action`** 包裹 |
+>
+> 中间件实际发出的中断 payload 里含 `action_requests` 与 `review_configs` 两个字段——前端渲染审批卡片时读这两个，而不是自定义节点那种扁平 dict。两套结构不一致正是"审批页永远白屏"的常见原因。
 
 ### 步骤 6：前端对接
 
@@ -135,7 +161,7 @@ graph = (StateGraph(State).add_node("transfer", transfer)
 
 cfg = {"configurable": {"thread_id": "tx-1"}}
 r = graph.invoke({"amount": 5000, "to": "bob"}, cfg)
-print(r.get("__interrupt__"))                        # 等待审批
+print(r.interrupts[0].value)                         # 等待审批（1.x 写法）
 print(graph.invoke(Command(resume={"type": "approve"}), cfg)["result"])
 ```
 
@@ -152,7 +178,7 @@ print(graph.invoke(Command(resume={"type": "approve"}), cfg)["result"])
 
 - 基础：工具执行前先 `decision = interrupt({"action": "delete_file", "path": ...})`。approve 走 `Command(resume={"type": "approve"})` 后继续执行删除；reject 走 `Command(resume={"type": "reject"})`，节点内判断为 reject 后**直接返回、不调用删除**。要点：reject 分支必须显式短路，不能靠"忘了调工具"。
 - 进阶：自定义节点用 `graph.update_state(cfg, {"to": 新收件人})` 改状态，再 `Command(resume={"type": "approve"})` 恢复；`HumanInTheLoopMiddleware` 则必须用 `Command(resume={"decisions": [{"type": "edit", "edited_action": {"name": "send_email", "args": {...}}}]})`——**两种 resume 格式不能混用**。edit 的本质是"恢复前把状态/动作改掉"。
-- 挑战：`POST /run` 触发 `graph.invoke`，把返回里的 `result["__interrupt__"][0].value` 作为 payload 用 200 返回（**中断不是错误**）；`POST /resume` 拿前端决策调 `graph.invoke(Command(resume=决策), cfg)`。要点：中断是服务端主动留下的"待办"，必须把 `thread_id` 一起回给客户端才能恢复。
+- 挑战：`POST /run` 触发 `graph.invoke`，把返回里的 `result.interrupts[0].value` 作为 payload 用 200 返回（**注意中断不是错误，返回码仍是 200**）（**中断不是错误**）；`POST /resume` 拿前端决策调 `graph.invoke(Command(resume=决策), cfg)`。要点：中断是服务端主动留下的"待办"，必须把 `thread_id` 一起回给客户端才能恢复。
 </details>
 
 ## 7. 自测清单
@@ -161,6 +187,7 @@ print(graph.invoke(Command(resume={"type": "approve"}), cfg)["result"])
 - [ ] 能用 `Command(resume=...)` 恢复，且用同一 `thread_id`
 - [ ] 知道没有 Checkpointer 中断会失效
 - [ ] 会用 `HumanInTheLoopMiddleware` 给指定工具加审批
+- [ ] 读中断用 `result.interrupts`，分得清两套 resume 结构（`reason` vs `message`）
 - [ ] 审批 payload 是结构化的（便于前端渲染）
 
 ## 8. 常见坑
@@ -172,6 +199,8 @@ print(graph.invoke(Command(resume={"type": "approve"}), cfg)["result"])
 | resume 后从开头重跑 | 用了新的 thread_id | 保持一致 |
 | 审批后仍执行了旧参数 | 没 `update_state` 就 resume | 先改状态再恢复 |
 | 每个工具都弹审批，体验差 | 审批粒度太粗 | 只对高风险工具 + 设阈值 |
+| **用中间件却按自定义节点的格式 resume** | 两者结构不同（中间件要 `{"decisions":[...]}`，reject 的键名是 `message`） | 见步骤 5 的对照表 |
+| **前端判断中断用 `if "__interrupt__" in res`** | 旧魔法键已 deprecated | 用 `if result.interrupts:` |
 
 ## 9. 延伸
 

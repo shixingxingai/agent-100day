@@ -219,7 +219,6 @@ trainer = SFTTrainer(
         save_strategy="epoch",
         report_to=[],
     ),
-    peft_config=lora,
 )
 
 trainer.train()
@@ -239,13 +238,17 @@ base = AutoModelForCausalLM.from_pretrained("Qwen/Qwen2.5-7B-Instruct")
 model = PeftModel.from_pretrained(base, "out/lora-ticket").merge_and_unload()   # 合并适配器
 tok = AutoTokenizer.from_pretrained("Qwen/Qwen2.5-7B-Instruct")
 
+# 评测要跟基线口径完全一致：贪心解码（do_sample=False），否则分数差异里混着采样噪声
 def classify(text: str) -> str:
     msgs = [{"role": "system", "content": "你是客服工单分类器，只输出类别名。"},
             {"role": "user", "content": text}]
     ids = tok.apply_chat_template(msgs, add_generation_prompt=True, return_tensors="pt")
-    out = model.generate(ids, max_new_tokens=8)
+    ids = ids.to(model.device)          # 若加载时用了 device_map="auto"，输入张量仍在 CPU，必须搬过去
+    out = model.generate(ids, max_new_tokens=8, do_sample=False)
     return tok.decode(out[0][ids.shape[-1]:], skip_special_tokens=True).strip()
 ```
+
+> **两个必踩的坑**：`ids.to(model.device)` —— 用 `device_map="auto"` 加载时**权重在 GPU 而输入张量还在 CPU**，不搬就抛 `Expected all tensors to be on the same device`；`do_sample=False` —— 微调前后两次评测如果一个采样一个贪心，分数差异里混着随机性，**你根本分不清是微调有效还是运气好**。
 
 **判据**（三者缺一不可）：
 
@@ -257,7 +260,7 @@ def classify(text: str) -> str:
 
 ```python
 # 合并成完整权重，才能被 vLLM / SGLang 直接加载
-# 注意：步骤 4 的 model 已 merge_and_unload() 过（是普通 PreTrainedModel，无此方法），
+# 注意：步骤 4 的 model 已 merge_and_unload() 过，返回的是已合并权重的 base model（不再是 PeftModel），
 # 这里从原始 base + 适配器重新合并，保证本步骤可独立运行：
 base = AutoModelForCausalLM.from_pretrained("Qwen/Qwen2.5-7B-Instruct")
 merged = PeftModel.from_pretrained(base, "out/lora-ticket").merge_and_unload()
